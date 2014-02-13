@@ -10,9 +10,16 @@
 
 @interface ABTViewController : UIViewController<NSURLConnectionDataDelegate>
 
-@property (weak, nonatomic) IBOutlet UISegmentedControl *marketSegmentedControl;
+@property (weak, nonatomic) IBOutlet UISlider *amountSlider;
 @property (weak, nonatomic) IBOutlet UILabel *purchasePriceLabel;
 @property (weak, nonatomic) IBOutlet UILabel *salePriceLabel;
 @property (weak, nonatomic) IBOutlet UILabel *profitLabel;
-- (IBAction)changedSegmentedControl:(id)sender;
+- (IBAction)changedAmount:(id)sender;
+@property (weak, nonatomic) IBOutlet UILabel *amountLabel;
+@property (weak, nonatomic) IBOutlet UIView *fetchOverlayView;
+@property (weak, nonatomic) IBOutlet UILabel *fetchOverlayLabel;
+
+@property (weak, nonatomic) IBOutlet UIImageView *cbeImageView;
+@property (weak, nonatomic) IBOutlet UIImageView *cbxImageView;
+- (IBAction)pressedSwitchButton:(id)sender;
 @end

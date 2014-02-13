@@ -9,19 +9,34 @@
 #import "ABTViewController.h"
 #import "MBProgressHUD.h"
 #import "Reachability.h"
+#import "UIView+SLAdditions.h"
 
 @interface ABTViewController ()
 {
     NSDictionary *campBXDictionary;
     NSDictionary *coinbaseDictionary;
     NSTimer *fetchTimer;
+    CGFloat btcAmount;
+    
+    BOOL hasFetchedCBX;
+    BOOL hasFetchedCBE;
+    NSTimer *overlayTimer;
+    BOOL overlayIsAnimating;
+    
+    CGFloat buyPrice;
+    CGFloat sellPrice;
+    
+    CGFloat rawBuyPrice;
+    CGFloat rawSellPrice;
+    
+    BOOL buyingOnCBX;
 }
 
 @end
 
 @implementation ABTViewController
 
-@synthesize marketSegmentedControl,purchasePriceLabel,salePriceLabel,profitLabel;
+@synthesize purchasePriceLabel,salePriceLabel,profitLabel;
 
 - (void)viewDidLoad
 {
@@ -29,6 +44,8 @@
 	// Do any additional setup after loading the view, typically from a nib.
     
     fetchTimer = [NSTimer scheduledTimerWithTimeInterval:10 target:self selector:@selector(fetchPrices) userInfo:Nil repeats:YES];
+    
+    //[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(recalculateProfit) name:@"hasFetched" object:nil];
 }
 
 - (void)viewWillAppear:(BOOL)animated
@@ -43,12 +60,15 @@
 
 - (void)fetchPrices
 {
+    self.fetchOverlayView.hidden = NO;
+    if (!overlayIsAnimating) [self startAnimatingOverlay];
+    
     [Reachability reachabilityForInternetConnection];
     NSLog(@"Fetching prices...");
-    [MBProgressHUD showHUDAddedTo:self.view animated:YES];
     
     [self fetchCampBXTickerPrices];
-    if (marketSegmentedControl.selectedSegmentIndex==0) [self fetchCoinbaseSellPrices];
+    
+    if (buyingOnCBX) [self fetchCoinbaseSellPrices];
     else [self fetchCoinbaseBuyPrices];
     
 }
@@ -95,9 +115,18 @@
     NSString *response = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     NSData *jsonData = [response dataUsingEncoding:NSUTF8StringEncoding];
     
-    if ([connection.currentRequest.URL.absoluteString rangeOfString:@"CampBX"].location!=NSNotFound) campBXDictionary = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
-    else if([connection.currentRequest.URL.absoluteString rangeOfString:@"coinbase"].location!=NSNotFound) coinbaseDictionary = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+    if ([connection.currentRequest.URL.absoluteString rangeOfString:@"CampBX"].location!=NSNotFound)
+    {
+        hasFetchedCBX = YES;
+        campBXDictionary = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+    }
+    else if([connection.currentRequest.URL.absoluteString rangeOfString:@"coinbase"].location!=NSNotFound)
+    {
+        hasFetchedCBE = YES;
+        coinbaseDictionary = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+    }
     
+    //[[NSNotificationCenter defaultCenter] postNotificationName:@"hasFetched" object:nil];
     [self recalculateProfit];
 }
 /*
@@ -123,45 +152,102 @@
     // Dispose of any resources that can be recreated.
 }
 
-- (void)recalculateProfit
+- (void)startAnimatingOverlay
 {
-    NSString *buyPrice;
-    NSString *sellPrice;
-    NSNumber *profit;
-    if (marketSegmentedControl.selectedSegmentIndex==0) {
-        buyPrice=  [campBXDictionary objectForKey:@"Best Ask"];
-        sellPrice = [coinbaseDictionary objectForKey:@"amount"];
-        profit = [NSNumber numberWithFloat:sellPrice.floatValue - 1.0055*buyPrice.floatValue];
+    overlayTimer = [NSTimer scheduledTimerWithTimeInterval:1 target:self selector:@selector(animateOverlay) userInfo:nil repeats:YES];
+    overlayIsAnimating = YES;
+    [MBProgressHUD showHUDAddedTo:self.fetchOverlayView animated:YES];
+}
+
+- (void)animateOverlay
+{
+    if ([self.fetchOverlayLabel.text rangeOfString:@"..."].location == NSNotFound) {
+        self.fetchOverlayLabel.text = [self.fetchOverlayLabel.text stringByAppendingString:@"."];
     }
     else
     {
-        buyPrice=  [coinbaseDictionary objectForKey:@"amount"];
-        sellPrice = [campBXDictionary objectForKey:@"Best Bid"];
-        profit = [NSNumber numberWithFloat:.9945*sellPrice.floatValue - buyPrice.floatValue];
+        self.fetchOverlayLabel.text = [self.fetchOverlayLabel.text substringToIndex:self.fetchOverlayLabel.text.length-3];
     }
-    NSString *profitString = [NSString stringWithFormat:@"%.2f",profit.floatValue];
-    
-    if (buyPrice.length*sellPrice.length>0) {
-        purchasePriceLabel.text = buyPrice;
-        salePriceLabel.text=  sellPrice;
-        profitLabel.text = profitString;
-        if (profit.floatValue<0) [profitLabel setTextColor:[UIColor redColor]];
+}
+
+- (void)hideOverlay
+{
+    [overlayTimer invalidate];
+    self.fetchOverlayView.hidden = YES;
+    overlayIsAnimating = NO;
+}
+
+- (void)recalculateProfit
+{
+    if (hasFetchedCBX && hasFetchedCBE) {
+        
+        if (!self.fetchOverlayView.hidden) [self hideOverlay];
+        
+        self.amountLabel.text = [NSString stringWithFormat:@"BTC %.2f",btcAmount];
+        
+        if (buyingOnCBX) {
+            
+            rawBuyPrice = [(NSString *)[campBXDictionary objectForKey:@"Best Ask"] floatValue];
+            buyPrice =  1.0055      // trading feeds on CBX are 0.55%
+            * btcAmount             // principal
+            * rawBuyPrice; //  raw price
+
+            rawSellPrice = [[[coinbaseDictionary objectForKey:@"subtotal"] objectForKey:@"amount"] floatValue];
+            sellPrice =  0.99      // trading feeds on CBE are 1%
+            * btcAmount             // principal
+            * rawSellPrice; //  raw price
+        }
+        else
+        {
+            
+            rawBuyPrice = [[[coinbaseDictionary objectForKey:@"subtotal"] objectForKey:@"amount"] floatValue];
+            buyPrice =  1.01      // trading feeds on CBE are 1%
+            * btcAmount             // principal
+            * rawBuyPrice; //  raw price
+            
+            rawSellPrice = [(NSString *)[campBXDictionary objectForKey:@"Best Bid"] floatValue];
+            sellPrice = 0.9945       // trading feeds on CBX are 0.55%
+            * btcAmount             // principal
+            * rawSellPrice; //  raw price
+        }
+        
+        purchasePriceLabel.text = [NSString stringWithFormat:@"$ %.2f",rawBuyPrice];
+        salePriceLabel.text = [NSString stringWithFormat:@"$ %.2f",rawSellPrice];
+        
+        CGFloat profit = sellPrice-buyPrice-0.15; // CBE charges a bank fee for all purchases and sales
+        profitLabel.text = [NSString stringWithFormat:@"$ %.2f",profit];
+        NSLog(@"After fees: Buy @ %f, Sell @ %f",buyPrice,sellPrice);
+        
+        if (profit<0) [profitLabel setTextColor:[UIColor redColor]];
         else [profitLabel setTextColor:[UIColor greenColor]];
+        
+        [MBProgressHUD hideAllHUDsForView:self.fetchOverlayView animated:YES];
     }
-    
-    [MBProgressHUD hideAllHUDsForView:self.view animated:YES];
 }
 
 - (void)resetScreen
 {
-    [marketSegmentedControl setSelectedSegmentIndex:0];
-    purchasePriceLabel.text = @"";
-    salePriceLabel.text = @"";
-    profitLabel.text = @"";
+    buyingOnCBX = NO;
+    [UIView animateWithDuration:1 animations:^(void)
+     {
+         self.cbeImageView.left = 29;
+         self.cbxImageView.left = 190;
+         purchasePriceLabel.text = @"";
+         salePriceLabel.text = @"";
+         profitLabel.text = @"";
+         btcAmount = pow(10,self.amountSlider.value);
+     }];
 }
 
 - (IBAction)changedSegmentedControl:(id)sender {
     if ([self reachabilityCheck]) [self fetchPrices];
+}
+
+- (IBAction)changedAmount:(id)sender {
+    
+    btcAmount = pow(10,self.amountSlider.value);
+    self.amountLabel.text = [NSString stringWithFormat:@"BTC %.2f",btcAmount];
+    [self recalculateProfit];
 }
 
 
@@ -177,5 +263,20 @@
         return NO;
     }
     return YES;
+}
+- (IBAction)pressedSwitchButton:(id)sender {
+    
+    buyingOnCBX = !buyingOnCBX;
+    
+    CGFloat cbxLeft = self.cbeImageView.left;
+    CGFloat cbeLeft = self.cbxImageView.left;
+    
+    [UIView animateWithDuration:0.3 animations:^(void)
+    {
+        self.cbeImageView.left = cbeLeft;   //  29
+        self.cbxImageView.left = cbxLeft;   // 190
+    }];
+    
+    [self recalculateProfit];
 }
 @end
