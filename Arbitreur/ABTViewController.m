@@ -277,6 +277,6 @@
         self.cbxImageView.left = cbxLeft;   // 190
     }];
     
-    [self recalculateProfit];
+    [self fetchPrices];
 }
 @end
